@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Leitor DWG — teste</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#15181b;--panel:#1b1f23;--line:#272c31;--txt:#e8e6e3;--muted:#8b9199;--red:#aa221f;--ok:#2dd4bf;--warn:#fbbf24}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:'Archivo',system-ui,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased;padding-bottom:60px}
+  .appbar{background:#0f1113;border-bottom:2px solid var(--red);padding:14px 18px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:5}
+  .appbar .dot{width:12px;height:12px;background:var(--red);border-radius:2px;transform:rotate(45deg)}
+  .appbar h1{font-size:15px;font-weight:800}
+  .appbar .tag{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  .wrap{max-width:1000px;margin:0 auto;padding:18px}
+  .drop{border:2px dashed var(--line);border-radius:14px;padding:26px 18px;text-align:center;background:var(--panel);cursor:pointer;transition:.15s}
+  .drop:hover,.drop.hot{border-color:var(--red);background:#20262b}
+  .drop b{display:block;font-size:15px;margin-bottom:4px}
+  .drop span{font-size:12px;color:var(--muted)}
+  .drop input{display:none}
+  .log{font-family:'JetBrains Mono',monospace;font-size:12px;background:#0f1113;border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:16px;white-space:pre-wrap;word-break:break-word;line-height:1.7;min-height:48px}
+  .log .ok{color:var(--ok)} .log .err{color:#ff5a3c} .log .warn{color:var(--warn)} .log .dim{color:var(--muted)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-top:16px;overflow:hidden}
+  .card h2{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:12px 14px;border-bottom:1px solid var(--line)}
+  .card .body{padding:6px 14px 12px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:6px 6px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+  td{font-family:'JetBrains Mono',monospace}
+  td.n{text-align:right}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:7px;vertical-align:middle;border:1px solid rgba(255,255,255,.2)}
+  .stage{background:#0f1113;border:1px solid var(--line);border-radius:12px;margin-top:8px;overflow:hidden}
+  .stage svg{width:100%;height:auto;display:block;background:#0d0f11}
+  .txtlist{font-family:'JetBrains Mono',monospace;font-size:12px;max-height:240px;overflow:auto}
+  .txtlist div{padding:4px 0;border-bottom:1px solid var(--line);color:var(--warn)}
+  details{margin-top:8px}
+  summary{cursor:pointer;font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace}
+  pre{font-family:'JetBrains Mono',monospace;font-size:11px;background:#0f1113;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;overflow:auto;max-height:300px;color:var(--muted)}
+</style>
+</head>
+<body>
+  <div class="appbar"><span class="dot"></span><h1>Leitor DWG — teste</h1><span class="tag">libredwg · wasm</span></div>
+  <div class="wrap">
+    <label class="drop" id="drop">
+      <b>Toque para escolher o DWG</b>
+      <span>ou arraste o arquivo aqui · roda 100% no seu navegador</span>
+      <input type="file" id="file" accept=".dwg,.dxf">
+    </label>
+    <div class="log" id="log"><span class="dim">aguardando arquivo…</span></div>
+    <div id="out"></div>
+  </div>
+
+<script type="module">
+const logEl=document.getElementById('log');
+const out=document.getElementById('out');
+function log(msg,cls){const s=document.createElement('span');if(cls)s.className=cls;s.textContent=msg+'\n';logEl.appendChild(s);}
+function clearLog(){logEl.innerHTML='';}
+
+const WASM_DIR='https://cdn.jsdelivr.net/npm/@mlightcad/libredwg-web/wasm/';
+const ESM='https://cdn.jsdelivr.net/npm/@mlightcad/libredwg-web/+esm';
+
+let LibreDwg, Dwg_File_Type, lib=null;
+clearLog();
+log('carregando biblioteca (WASM)…','dim');
+try{
+  const mod=await import(ESM);
+  LibreDwg=mod.LibreDwg; Dwg_File_Type=mod.Dwg_File_Type;
+  if(!LibreDwg) throw new Error('LibreDwg não exportado pelo pacote');
+  lib=await LibreDwg.create(WASM_DIR);
+  log('✓ biblioteca pronta','ok');
+}catch(e){
+  log('✗ falha ao carregar a biblioteca: '+(e&&e.message?e.message:e),'err');
+  log('isso costuma ser bloqueio de rede/CDN no navegador. me diga o que apareceu aqui.','warn');
+}
+
+const ACI={1:'#ff4136',2:'#ffdc00',3:'#2ecc40',4:'#7fdbff',5:'#3d6eff',6:'#f012be',7:'#e8e6e3',8:'#808080',9:'#bbbbbb',30:'#ff851b',40:'#ffb14e',50:'#fff36b'};
+function colorFor(idx,layer){
+  if(idx!=null&&ACI[idx])return ACI[idx];
+  // hash do layer p/ cor estável
+  let h=0;const s=(layer||'?')+'';for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))&0xffffff;
+  return 'hsl('+(h%360)+',70%,62%)';
+}
+const P=p=>p?({x:p.x??p[0]??0,y:p.y??p[1]??0}):null;
+const dist=(a,b)=>Math.hypot(b.x-a.x,b.y-a.y);
+
+function collectEntities(db){
+  if(Array.isArray(db))return db;
+  for(const k of ['entities','modelSpaceEntities','modelSpace','MODEL_SPACE']) if(Array.isArray(db?.[k]))return db[k];
+  // procura array de objetos com 'type'
+  for(const k in db){const v=db[k];if(Array.isArray(v)&&v.length&&typeof v[0]==='object'&&('type'in v[0]))return v;}
+  return [];
+}
+function segsOf(e){
+  const t=(e.type||'').toUpperCase();
+  if(t==='LINE'){const a=P(e.startPoint||e.start||e.vertices?.[0]),b=P(e.endPoint||e.end||e.vertices?.[1]);return a&&b?[[a,b]]:[];}
+  if(t==='LWPOLYLINE'||t==='POLYLINE'){const v=(e.vertices||e.points||[]).map(P).filter(Boolean);const s=[];for(let i=0;i<v.length-1;i++)s.push([v[i],v[i+1]]);if((e.closed||e.isClosed)&&v.length>2)s.push([v[v.length-1],v[0]]);return s;}
+  return [];
+}
+function textOf(e){const t=(e.type||'').toUpperCase();if(t==='TEXT'||t==='MTEXT'||t==='ATTRIB')return e.text??e.textValue??e.contents??e.string??null;return null;}
+
+function inspect(db){
+  const ents=collectEntities(db);
+  log('✓ '+ents.length+' entidades lidas','ok');
+  if(!ents.length){log('não achei a lista de entidades no formato esperado — veja o JSON bruto abaixo.','warn');}
+
+  // contagem por tipo
+  const byType={}, byLayer={}, byColor={};
+  let allSegs=[]; const texts=[];
+  for(const e of ents){
+    const t=(e.type||'?').toUpperCase();byType[t]=(byType[t]||0)+1;
+    const lay=(e.layer??'?')+'';
+    const idx=e.colorIndex??e.color?.index??(typeof e.color==='number'?e.color:null);
+    const segs=segsOf(e);
+    if(segs.length){
+      let len=0;for(const[a,b]of segs)len+=dist(a,b);
+      byLayer[lay]=byLayer[lay]||{n:0,len:0,color:idx};byLayer[lay].n+=segs.length;byLayer[lay].len+=len;
+      const ck=idx==null?'(sem cor / por layer)':('cor '+idx);
+      byColor[ck]=byColor[ck]||{n:0,len:0,idx};byColor[ck].n+=segs.length;byColor[ck].len+=len;
+      const col=colorFor(idx,lay);
+      for(const[a,b]of segs)allSegs.push({a,b,col});
+    }
+    const tx=textOf(e);if(tx!=null&&(''+tx).trim())texts.push({t:(''+tx).trim(),layer:lay});
+  }
+
+  out.innerHTML='';
+  // tabela tipos
+  out.appendChild(tableCard('Entidades por tipo',['Tipo','Qtd'],Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[k,String(v)])));
+  // por layer
+  out.appendChild(tableCard('Por LAYER  (somatório de linhas)',['','Layer','Segmentos','Compr. (un)'],
+    Object.entries(byLayer).sort((a,b)=>b[1].len-a[1].len).map(([k,v])=>[swatch(colorFor(v.color,k)),k,String(v.n),fmt(v.len)]),true));
+  // por cor
+  out.appendChild(tableCard('Por COR',['Cor','Segmentos','Compr. (un)'],
+    Object.entries(byColor).sort((a,b)=>b[1].len-a[1].len).map(([k,v])=>[k,String(v.n),fmt(v.len)])));
+  // desenho
+  if(allSegs.length)out.appendChild(drawCard(allSegs));
+  // textos
+  if(texts.length)out.appendChild(textCard(texts));
+  // json bruto (amostra) p/ debug
+  const sample=ents.slice(0,3);
+  out.appendChild(rawCard({chaves_db:Object.keys(db||{}),amostra_entidades:sample}));
+}
+
+function fmt(n){return Math.round(n).toLocaleString('pt-BR');}
+function swatch(c){return '<span class="sw" style="background:'+c+'"></span>';}
+function tableCard(title,headers,rows,firstHtml){
+  const c=document.createElement('div');c.className='card';
+  let h='<h2>'+title+'</h2><div class="body"><table><thead><tr>'+headers.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>';
+  for(const r of rows){h+='<tr>'+r.map((cell,i)=>{const cls=(i===r.length-1||(/^\d/.test(cell)&&i>0))?' class="n"':'';return (firstHtml&&i===0)?'<td>'+cell+'</td>':'<td'+cls+'>'+escapeHtml(cell)+'</td>';}).join('')+'</tr>';}
+  h+='</tbody></table></div>';c.innerHTML=h;return c;
+}
+function drawCard(segs){
+  let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity;
+  for(const s of segs){for(const p of [s.a,s.b]){if(p.x<minx)minx=p.x;if(p.y<miny)miny=p.y;if(p.x>maxx)maxx=p.x;if(p.y>maxy)maxy=p.y;}}
+  const w=maxx-minx||1,h=maxy-miny||1,pad=Math.max(w,h)*0.03;
+  const W=960,H=Math.max(160,Math.min(620,W*(h/w)));
+  const sx=x=>(x-minx+pad)/(w+2*pad)*W, sy=y=>H-(y-miny+pad)/(h+2*pad)*H;
+  let lines='';for(const s of segs)lines+='<line x1="'+sx(s.a.x).toFixed(1)+'" y1="'+sy(s.a.y).toFixed(1)+'" x2="'+sx(s.b.x).toFixed(1)+'" y2="'+sy(s.b.y).toFixed(1)+'" stroke="'+s.col+'" stroke-width="1"/>';
+  const c=document.createElement('div');c.className='card';
+  c.innerHTML='<h2>Desenho lido ('+segs.length+' segmentos)</h2><div class="body"><div class="stage"><svg viewBox="0 0 '+W+' '+H.toFixed(0)+'">'+lines+'</svg></div></div>';
+  return c;
+}
+function textCard(texts){
+  const c=document.createElement('div');c.className='card';
+  let h='<h2>Textos encontrados ('+texts.length+')</h2><div class="body"><div class="txtlist">';
+  for(const t of texts.slice(0,200))h+='<div>'+escapeHtml(t.t)+'  <span style="color:var(--muted)">· '+escapeHtml(t.layer)+'</span></div>';
+  h+='</div></div>';c.innerHTML=h;return c;
+}
+function rawCard(obj){
+  const c=document.createElement('div');c.className='card';
+  c.innerHTML='<h2>Dados brutos (debug)</h2><div class="body"><details><summary>ver JSON</summary><pre>'+escapeHtml(JSON.stringify(obj,(k,v)=>typeof v==='number'?Math.round(v*100)/100:v,2))+'</pre></details></div>';
+  return c;
+}
+function escapeHtml(s){return (s+'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+async function handle(file){
+  if(!lib){log('biblioteca não está pronta — não dá pra ler ainda.','err');return;}
+  out.innerHTML='';
+  log('—','dim');log('lendo "'+file.name+'" ('+Math.round(file.size/1024)+' KB)…','dim');
+  try{
+    const buf=new Uint8Array(await file.arrayBuffer());
+    const isDxf=/\.dxf$/i.test(file.name);
+    log('decodificando…','dim');
+    let dwg;
+    try{ dwg=lib.dwg_read_data(buf, isDxf?Dwg_File_Type.DXF:Dwg_File_Type.DWG); }
+    catch(e1){ dwg=lib.dwg_read_data(buf.buffer, isDxf?Dwg_File_Type.DXF:Dwg_File_Type.DWG); }
+    if(dwg&&dwg.error&&dwg.error!==0){ log('aviso: leitor retornou código '+dwg.error+' (alguns objetos podem ter sido pulados)','warn'); }
+    const db=lib.convert(dwg);
+    try{ lib.dwg_free(dwg); }catch(_){}
+    inspect(db);
+  }catch(e){
+    log('✗ erro ao ler: '+(e&&e.message?e.message:e),'err');
+    log('me copie esta mensagem que eu ajusto.','warn');
+  }
+}
+
+const fileInput=document.getElementById('file'),drop=document.getElementById('drop');
+fileInput.addEventListener('change',e=>{if(e.target.files[0])handle(e.target.files[0]);});
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
+drop.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)handle(f);});
+</script>
+</body>
+</html>
