@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Leitor DWG — teste</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#15181b;--panel:#1b1f23;--line:#272c31;--txt:#e8e6e3;--muted:#8b9199;--red:#aa221f;--ok:#2dd4bf;--warn:#fbbf24}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:'Archivo',system-ui,sans-serif;line-height:1.5;padding-bottom:60px}
+  .appbar{background:#0f1113;border-bottom:2px solid var(--red);padding:14px 18px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:5}
+  .appbar .dot{width:12px;height:12px;background:var(--red);border-radius:2px;transform:rotate(45deg)}
+  .appbar h1{font-size:15px;font-weight:800}
+  .appbar .tag{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  .wrap{max-width:1000px;margin:0 auto;padding:18px}
+  .drop{border:2px dashed var(--line);border-radius:14px;padding:24px 18px;text-align:center;background:var(--panel);cursor:pointer}
+  .drop.hot{border-color:var(--red)}
+  .drop b{display:block;font-size:15px;margin-bottom:4px}
+  .drop span{font-size:12px;color:var(--muted)}
+  .drop input{display:none}
+  .log{font-family:'JetBrains Mono',monospace;font-size:12px;background:#0f1113;border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:16px;white-space:pre-wrap;word-break:break-word;line-height:1.7;min-height:48px}
+  .log .ok{color:var(--ok)}.log .err{color:#ff5a3c}.log .warn{color:var(--warn)}.log .dim{color:var(--muted)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-top:16px;overflow:hidden}
+  .card h2{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:12px 14px;border-bottom:1px solid var(--line)}
+  .card .body{padding:6px 14px 12px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:6px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase}
+  td{font-family:'JetBrains Mono',monospace}
+  td.n{text-align:right}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:7px;vertical-align:middle;border:1px solid rgba(255,255,255,.2)}
+  .stage{background:#0d0f11;border:1px solid var(--line);border-radius:12px;margin-top:8px;overflow:hidden}
+  .stage svg{width:100%;height:auto;display:block}
+  .txtlist{font-family:'JetBrains Mono',monospace;font-size:12px;max-height:240px;overflow:auto}
+  .txtlist div{padding:4px 0;border-bottom:1px solid var(--line);color:var(--warn)}
+  details{margin-top:8px}summary{cursor:pointer;font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace}
+  pre{font-family:'JetBrains Mono',monospace;font-size:11px;background:#0f1113;border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:8px;overflow:auto;max-height:300px;color:var(--muted)}
+</style>
+</head>
+<body>
+  <div class="appbar"><span class="dot"></span><h1>Leitor DWG — teste</h1><span class="tag">libredwg · wasm</span></div>
+  <div class="wrap">
+    <label class="drop" id="drop"><b>Toque para escolher o DWG</b><span>ou arraste aqui · roda no seu navegador</span><input type="file" id="file" accept=".dwg,.dxf"></label>
+    <div class="log" id="log"><span class="dim">iniciando…</span></div>
+    <div id="out"></div>
+  </div>
+
+<script type="module">
+const logEl=document.getElementById('log'),out=document.getElementById('out');
+function log(m,c){const s=document.createElement('span');if(c)s.className=c;s.textContent=m+'\n';logEl.appendChild(s);}
+logEl.innerHTML='';
+
+const BASE='https://cdn.jsdelivr.net/npm/@mlightcad/libredwg-web';
+const WASM_CANDIDATES=[BASE+'/wasm/libredwg-web.wasm', BASE+'/wasm/libredwg.wasm'];
+let LibreDwg, Dwg_File_Type, lib=null, wasmBinary=null, wasmUrl=null;
+
+// 1) baixar bytes do wasm (jsDelivr libera CORS)
+log('baixando módulo wasm…','dim');
+for(const u of WASM_CANDIDATES){
+  try{const r=await fetch(u);if(r.ok){wasmBinary=await r.arrayBuffer();wasmUrl=u;log('✓ wasm baixado ('+Math.round(wasmBinary.byteLength/1024)+' KB)','ok');break;}}
+  catch(e){}
+}
+if(!wasmBinary)log('✗ não consegui baixar o wasm de nenhum caminho conhecido','err');
+
+// 2) importar wrapper
+try{const mod=await import(BASE+'/+esm');LibreDwg=mod.LibreDwg;Dwg_File_Type=mod.Dwg_File_Type;if(!LibreDwg)throw new Error('LibreDwg ausente');log('✓ wrapper importado','ok');}
+catch(e){log('✗ falha ao importar wrapper: '+e.message,'err');}
+
+// 3) cascata de inicialização
+async function tryInit(){
+  const attempts=[];
+  // A: create com diretório explícito
+  attempts.push(['create(dir)', async()=>{ if(!LibreDwg)throw new Error('sem wrapper'); return await LibreDwg.create(BASE+'/wasm/'); }]);
+  // B: create com opções (locateFile + wasmBinary)
+  attempts.push(['create(opts)', async()=>{ if(!LibreDwg)throw new Error('sem wrapper'); return await LibreDwg.create({wasmBinary,locateFile:()=>wasmUrl}); }]);
+  // C: glue cru com wasmBinary -> new LibreDwg(module)
+  attempts.push(['raw+ctor', async()=>{
+    const glue=await import(BASE+'/wasm/libredwg-web.js');
+    const createModule=glue.createModule||glue.default||glue;
+    const module=await createModule({wasmBinary,locateFile:()=>wasmUrl});
+    if(LibreDwg){try{return new LibreDwg(module);}catch(_){}}
+    return module; // último recurso: módulo cru
+  }]);
+  for(const [name,fn] of attempts){
+    try{
+      const cand=await fn();
+      if(cand && (typeof cand.convert==='function' || typeof cand.dwg_read_data==='function')){
+        log('✓ inicializado via '+name,'ok');return cand;
+      }else{log('· '+name+': sem métodos esperados','dim');}
+    }catch(e){log('· '+name+' falhou: '+(e&&e.message?e.message:e),'dim');}
+  }
+  return null;
+}
+lib=await tryInit();
+if(lib)log('✓ pronto — pode soltar o DWG','ok');
+else log('✗ não consegui inicializar a biblioteca aqui.','err');
+
+// ---------- leitura/inspeção ----------
+const ACI={1:'#ff4136',2:'#ffdc00',3:'#2ecc40',4:'#7fdbff',5:'#3d6eff',6:'#f012be',7:'#e8e6e3',8:'#808080',9:'#bbbbbb',30:'#ff851b',40:'#ffb14e'};
+function colorFor(idx,layer){if(idx!=null&&ACI[idx])return ACI[idx];let h=0;const s=(layer||'?')+'';for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))&0xffffff;return 'hsl('+(h%360)+',70%,62%)';}
+const P=p=>p?({x:p.x??p[0]??0,y:p.y??p[1]??0}):null;
+const dist=(a,b)=>Math.hypot(b.x-a.x,b.y-a.y);
+function collectEntities(db){
+  if(Array.isArray(db))return db;
+  for(const k of ['entities','modelSpaceEntities','modelSpace','MODEL_SPACE'])if(Array.isArray(db?.[k]))return db[k];
+  for(const k in db){const v=db[k];if(Array.isArray(v)&&v.length&&typeof v[0]==='object'&&('type'in v[0]))return v;}
+  return [];
+}
+function segsOf(e){const t=(e.type||'').toUpperCase();
+  if(t==='LINE'){const a=P(e.startPoint||e.start||e.vertices?.[0]),b=P(e.endPoint||e.end||e.vertices?.[1]);return a&&b?[[a,b]]:[];}
+  if(t==='LWPOLYLINE'||t==='POLYLINE'){const v=(e.vertices||e.points||[]).map(P).filter(Boolean);const s=[];for(let i=0;i<v.length-1;i++)s.push([v[i],v[i+1]]);if((e.closed||e.isClosed)&&v.length>2)s.push([v[v.length-1],v[0]]);return s;}
+  return [];}
+function textOf(e){const t=(e.type||'').toUpperCase();if(t==='TEXT'||t==='MTEXT'||t==='ATTRIB')return e.text??e.textValue??e.contents??e.string??null;return null;}
+
+function inspect(db){
+  const ents=collectEntities(db);
+  log('✓ '+ents.length+' entidades lidas','ok');
+  const byType={},byLayer={},byColor={};let allSegs=[];const texts=[];
+  for(const e of ents){
+    const t=(e.type||'?').toUpperCase();byType[t]=(byType[t]||0)+1;
+    const lay=(e.layer??'?')+'';const idx=e.colorIndex??e.color?.index??(typeof e.color==='number'?e.color:null);
+    const segs=segsOf(e);
+    if(segs.length){let len=0;for(const[a,b]of segs)len+=dist(a,b);
+      byLayer[lay]=byLayer[lay]||{n:0,len:0,color:idx};byLayer[lay].n+=segs.length;byLayer[lay].len+=len;
+      const ck=idx==null?'(por layer)':('cor '+idx);byColor[ck]=byColor[ck]||{n:0,len:0};byColor[ck].n+=segs.length;byColor[ck].len+=len;
+      const col=colorFor(idx,lay);for(const[a,b]of segs)allSegs.push({a,b,col});}
+    const tx=textOf(e);if(tx!=null&&(''+tx).trim())texts.push({t:(''+tx).trim(),layer:lay});
+  }
+  out.innerHTML='';
+  out.appendChild(tableCard('Por tipo',['Tipo','Qtd'],Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[k,String(v)])));
+  out.appendChild(tableCard('Por LAYER (soma de linhas)',['','Layer','Segm.','Compr.(un)'],Object.entries(byLayer).sort((a,b)=>b[1].len-a[1].len).map(([k,v])=>[swatch(colorFor(v.color,k)),k,String(v.n),fmt(v.len)]),true));
+  out.appendChild(tableCard('Por COR',['Cor','Segm.','Compr.(un)'],Object.entries(byColor).sort((a,b)=>b[1].len-a[1].len).map(([k,v])=>[k,String(v.n),fmt(v.len)])));
+  if(allSegs.length)out.appendChild(drawCard(allSegs));
+  if(texts.length)out.appendChild(textCard(texts));
+  out.appendChild(rawCard({chaves_db:Object.keys(db||{}),amostra:ents.slice(0,3)}));
+}
+function fmt(n){return Math.round(n).toLocaleString('pt-BR');}
+function swatch(c){return '<span class="sw" style="background:'+c+'"></span>';}
+function tableCard(title,headers,rows,firstHtml){const c=document.createElement('div');c.className='card';let h='<h2>'+title+'</h2><div class="body"><table><thead><tr>'+headers.map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>';for(const r of rows){h+='<tr>'+r.map((cell,i)=>(firstHtml&&i===0)?'<td>'+cell+'</td>':'<td'+((i>0&&/^[\d.]/.test(cell))?' class="n"':'')+'>'+esc(cell)+'</td>').join('')+'</tr>';}h+='</tbody></table></div>';c.innerHTML=h;return c;}
+function drawCard(segs){let mnx=Infinity,mny=Infinity,mxx=-Infinity,mxy=-Infinity;for(const s of segs)for(const p of[s.a,s.b]){if(p.x<mnx)mnx=p.x;if(p.y<mny)mny=p.y;if(p.x>mxx)mxx=p.x;if(p.y>mxy)mxy=p.y;}const w=mxx-mnx||1,h=mxy-mny||1,pad=Math.max(w,h)*0.03,W=960,H=Math.max(160,Math.min(620,W*(h/w)));const sx=x=>(x-mnx+pad)/(w+2*pad)*W,sy=y=>H-(y-mny+pad)/(h+2*pad)*H;let l='';for(const s of segs)l+='<line x1="'+sx(s.a.x).toFixed(1)+'" y1="'+sy(s.a.y).toFixed(1)+'" x2="'+sx(s.b.x).toFixed(1)+'" y2="'+sy(s.b.y).toFixed(1)+'" stroke="'+s.col+'" stroke-width="1"/>';const c=document.createElement('div');c.className='card';c.innerHTML='<h2>Desenho lido ('+segs.length+' segmentos)</h2><div class="body"><div class="stage"><svg viewBox="0 0 '+W+' '+H.toFixed(0)+'">'+l+'</svg></div></div>';return c;}
+function textCard(texts){const c=document.createElement('div');c.className='card';let h='<h2>Textos ('+texts.length+')</h2><div class="body"><div class="txtlist">';for(const t of texts.slice(0,200))h+='<div>'+esc(t.t)+' <span style="color:var(--muted)">· '+esc(t.layer)+'</span></div>';h+='</div></div>';c.innerHTML=h;return c;}
+function rawCard(o){const c=document.createElement('div');c.className='card';c.innerHTML='<h2>Debug</h2><div class="body"><details><summary>ver JSON</summary><pre>'+esc(JSON.stringify(o,(k,v)=>typeof v==='number'?Math.round(v*100)/100:v,2))+'</pre></details></div>';return c;}
+function esc(s){return(s+'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+async function handle(file){
+  if(!lib){log('biblioteca não inicializada — não dá pra ler.','err');return;}
+  out.innerHTML='';log('—','dim');log('lendo "'+file.name+'"…','dim');
+  try{
+    const buf=new Uint8Array(await file.arrayBuffer());
+    const ft=/\.dxf$/i.test(file.name)?(Dwg_File_Type?.DXF):(Dwg_File_Type?.DWG);
+    let dwg;try{dwg=lib.dwg_read_data(buf,ft);}catch(_){dwg=lib.dwg_read_data(buf.buffer,ft);}
+    if(dwg&&dwg.error)log('aviso: código '+dwg.error+' (alguns objetos podem ter sido pulados)','warn');
+    const db=typeof lib.convert==='function'?lib.convert(dwg):dwg;
+    try{lib.dwg_free&&lib.dwg_free(dwg);}catch(_){}
+    inspect(db);
+  }catch(e){log('✗ erro ao ler: '+(e&&e.message?e.message:e),'err');}
+}
+const fi=document.getElementById('file'),dz=document.getElementById('drop');
+fi.addEventListener('change',e=>{if(e.target.files[0])handle(e.target.files[0]);});
+['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('hot');}));
+['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.remove('hot');}));
+dz.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)handle(f);});
+</script>
+</body>
+</html>
