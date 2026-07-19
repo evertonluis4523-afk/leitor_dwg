@@ -173,6 +173,9 @@
     </div>
     <div class="log" id="log"></div>
 
+    <h2 class="sec">Obras salvas</h2>
+    <div id="historicoHome"></div>
+
     <div id="app" class="hide">
       <div class="filebar"><span class="fb-name" id="fbName">arquivo carregado</span><button class="btn ghost" id="trocarArq">↩ trocar arquivo</button></div>
       <!-- AJUSTES -->
@@ -1588,10 +1591,43 @@ function snapHTML(obra,date,rows,peso,tel,custo,telcusto){
   '</div>';
 }
 function loadObras(){try{return JSON.parse(localStorage.getItem('corteRM_obras')||'[]');}catch(e){return[];}}
-function renderHistorico(){const el=document.getElementById('historico');if(!el)return;const arr=loadObras();if(!arr.length){el.innerHTML='<span class="muted" style="font-size:12px">Nenhuma obra salva ainda.</span>';return;}el.innerHTML=arr.map((o,i)=>'<div class="obra-item"><div class="meta"><b>'+(o.obra||'—')+'</b><div class="dt">'+new Date(o.date).toLocaleDateString('pt-BR')+' · '+Math.round(o.peso||0).toLocaleString('pt-BR')+' kg</div></div><button data-open="'+i+'">abrir</button><button data-del="'+i+'">✕</button></div>').join('');el.querySelectorAll('button[data-open]').forEach(b=>b.addEventListener('click',()=>openObra(+b.dataset.open)));el.querySelectorAll('button[data-del]').forEach(b=>b.addEventListener('click',()=>{const a=loadObras();a.splice(+b.dataset.del,1);try{localStorage.setItem('corteRM_obras',JSON.stringify(a));}catch(e){}renderHistorico();}));}
+function renderHistorico(){
+  const els=[document.getElementById('historico'),document.getElementById('historicoHome')].filter(Boolean);
+  if(!els.length)return;
+  const arr=loadObras();
+  const html=!arr.length?'<span class="muted" style="font-size:12px">Nenhuma obra salva ainda.</span>':arr.map((o,i)=>'<div class="obra-item"><div class="meta"><b>'+(o.obra||'—')+'</b><div class="dt">'+new Date(o.date).toLocaleDateString('pt-BR')+' · '+Math.round(o.peso||0).toLocaleString('pt-BR')+' kg</div></div>'+((o.estado&&o.estado.fichas)?'<button data-cont="'+i+'">continuar</button>':'')+'<button data-open="'+i+'">resumo</button><button data-del="'+i+'">✕</button></div>').join('');
+  els.forEach(el=>{
+    el.innerHTML=html;
+    el.querySelectorAll('button[data-cont]').forEach(b=>b.addEventListener('click',()=>continuarObra(+b.dataset.cont)));
+    el.querySelectorAll('button[data-open]').forEach(b=>b.addEventListener('click',()=>openObra(+b.dataset.open)));
+    el.querySelectorAll('button[data-del]').forEach(b=>b.addEventListener('click',()=>{const a=loadObras();a.splice(+b.dataset.del,1);try{localStorage.setItem('corteRM_obras',JSON.stringify(a));}catch(e){}renderHistorico();}));
+  });
+}
 function openObra(i){const o=loadObras()[i];if(!o)return;const pa=document.getElementById('printArea');pa.classList.remove('hide');pa.innerHTML=snapHTML(o.obra,o.date,o.rows,o.peso,o.telha,o.custo,o.telcusto)+'<div style="margin-top:12px"><button class="btn" id="pPrint">Imprimir</button> <button class="btn ghost" id="pClose">Fechar</button></div>';pa.scrollIntoView({behavior:'smooth'});document.getElementById('pPrint').addEventListener('click',()=>window.print());document.getElementById('pClose').addEventListener('click',()=>pa.classList.add('hide'));}
 document.getElementById('print').addEventListener('click',()=>{const pa=document.getElementById('printArea');pa.classList.remove('hide');pa.innerHTML=snapHTML(document.getElementById('obra').value,Date.now(),LASTROWS,LASTPESO,LASTTELHATXT,LASTCUSTO,LASTTELHACUSTO);window.print();setTimeout(()=>pa.classList.add('hide'),500);});
-document.getElementById('saveObra').addEventListener('click',()=>{if(!LASTROWS.length){return;}const obra=document.getElementById('obra').value||('Obra '+new Date().toLocaleDateString('pt-BR'));const arr=loadObras();arr.unshift({obra,date:Date.now(),rows:LASTROWS,peso:LASTPESO,telha:LASTTELHATXT,custo:LASTCUSTO,telcusto:LASTTELHACUSTO});try{localStorage.setItem('corteRM_obras',JSON.stringify(arr.slice(0,50)));}catch(e){}renderHistorico();const b=document.getElementById('saveObra');b.textContent='Salva!';setTimeout(()=>b.textContent='Salvar obra',1500);});
+document.getElementById('saveObra').addEventListener('click',()=>{if(!LASTROWS.length){return;}const obra=document.getElementById('obra').value||('Obra '+new Date().toLocaleDateString('pt-BR'));const arr=loadObras();
+  const estado={fichas:JSON.parse(JSON.stringify(FICHAS)),kgm:JSON.parse(JSON.stringify(KGM)),
+    unit:(document.getElementById('unit')||{}).value,quebra:(document.getElementById('quebra')||{}).value,barra:(document.getElementById('barra')||{}).value,
+    telhaval:(document.getElementById('telhaval')||{}).value,galvkg:(document.getElementById('galvkg')||{}).value,angtelhado:(document.getElementById('angtelhado')||{}).value};
+  arr.unshift({obra,date:Date.now(),rows:LASTROWS,peso:LASTPESO,telha:LASTTELHATXT,custo:LASTCUSTO,telcusto:LASTTELHACUSTO,estado});
+  try{localStorage.setItem('corteRM_obras',JSON.stringify(arr.slice(0,50)));}catch(e){}renderHistorico();const b=document.getElementById('saveObra');b.textContent='Salva!';setTimeout(()=>b.textContent='Salvar obra',1500);});
+function continuarObra(i){
+  const o=loadObras()[i];if(!o)return;
+  if(!o.estado||!o.estado.fichas){alert('Esta obra foi salva numa versão antiga e só tem o resumo impresso — não é possível continuar editando. Use "abrir" para ver o resumo.');return;}
+  if(FICHAS.length && !confirm('Continuar esta obra substitui o que está na tela agora (não salvo). Continuar?'))return;
+  SEG=[];TXT=[];CL=[];selCluster=-1;
+  FICHAS=JSON.parse(JSON.stringify(o.estado.fichas));
+  for(const k in KGM)delete KGM[k];
+  Object.assign(KGM,o.estado.kgm||{});
+  ['unit','quebra','barra','telhaval','galvkg','angtelhado'].forEach(k=>{const el=document.getElementById(k);if(el&&o.estado[k]!=null&&o.estado[k]!=='')el.value=o.estado[k];});
+  document.getElementById('obra').value=o.obra||'';
+  unitF=+document.getElementById('unit').value;
+  document.getElementById('app').classList.remove('hide');
+  const ent=document.querySelector('.entradas');if(ent)ent.classList.add('hide');
+  const fb=document.getElementById('fbName');if(fb)fb.textContent=(o.obra||'obra salva')+' · continuando edição';
+  renderAll();save();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
 
 // botão voltar (trocar arquivo)
 document.getElementById('trocarArq').addEventListener('click',voltarParaArquivo);
